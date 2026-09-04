@@ -1,28 +1,35 @@
-# ── RegexPatternSets for US1 (us-east-1) ────────────────────────────────────
-# US1 is the SOURCE of truth for patterns.
-# US2 and EU use the SAME pattern strings — different ARNs auto-generated.
+# ── RegexPatternSets for US1 (us-east-1) ─────────────────────────────────────
+# US1 is the source of truth for pattern strings.
+# US2 and EU use the SAME strings — Terraform creates region-specific ARNs.
 #
-# HOW TO ADD A NEW PATTERN SET (from security ticket):
-#   1. Get the pattern strings from AWS Console → WAF → RegexPatternSets
-#   2. Add an entry below in this file AND in us2/eu terraform.tfvars
-#   3. Open a PR — no changes to main.tf needed
+# To add a new pattern set (new security ticket):
+#   1. Add an entry here and in us2 + eu terraform.tfvars (same patterns)
+#   2. Open a PR — no main.tf changes needed
 
 regex_pattern_sets = {
 
-  # Jira: SEC-101 | Added: 2026-08-01
-  # Source: AWS Console → WAF → RegexPatternSets → XSS_CUSTOM_NEW (us-east-1)
-  # TODO: Replace placeholders with actual regex strings from the console
+  # Jira: SEC-101 | Added: 2026-08-01 | Switched to block: 2026-08-10
   "XSS_CUSTOM_NEW" = {
-    description = "Custom XSS detection patterns"
+    description = "Custom XSS detection patterns — matches script injection in headers, body and URI"
     patterns = [
-      "PLACEHOLDER_PATTERN_1",  # replace with actual regex from console
-      "PLACEHOLDER_PATTERN_2"   # replace with actual regex from console
+      "(?i)<script[\s\S]*?>",
+      "(?i)javascript\s*:",
+      "(?i)on(load|click|mouseover|error|focus)\s*=",
+      "(?i)<iframe[\s\S]*?>",
+      "(?i)document\.(cookie|write|location)"
     ]
   }
 
-  # Add future pattern sets here:
-  # "SQLI_CUSTOM" = {
-  #   description = "Custom SQL injection patterns"
-  #   patterns    = ["pattern1", "pattern2"]
-  # }
+  # Jira: SEC-115 | Added: 2026-08-20 | Pending validation
+  "SQLI_CUSTOM_NEW" = {
+    description = "Custom SQL injection detection patterns — matches common SQLi payloads"
+    patterns = [
+      "(?i)(union\s+(all\s+)?select)",
+      "(?i)(\bor\b\s+\d+\s*=\s*\d+)",
+      "(?i)(;\s*(drop|alter|create|truncate)\s+table)",
+      "(?i)(insert\s+into\s+\w+\s*\()",
+      "(?i)(sleep\s*\(\s*\d+\s*\))"
+    ]
+  }
+
 }

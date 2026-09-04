@@ -19,7 +19,7 @@ locals {
     Environment = "all"
     ManagedBy   = "terraform"
     Layer       = "us1-regex-patterns"
-    Repo        = "techops-waf-mangalyaan"
+    Repo        = "techops-waf"
     Stack       = "waf"
     Region      = "us-east-1"
   }

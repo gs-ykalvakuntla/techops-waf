@@ -62,8 +62,8 @@ resource "aws_iam_role" "github_actions_waf" {
         }
         StringLike = {
           "token.actions.githubusercontent.com:sub" = [
-            "repo:gs-ykalvakuntla/techops-waf-mangalyaan:ref:refs/heads/main",
-            "repo:gs-ykalvakuntla/techops-waf-mangalyaan:pull_request"
+            "repo:gs-ykalvakuntla/techops-waf:ref:refs/heads/main",
+            "repo:gs-ykalvakuntla/techops-waf:pull_request"
           ]
         }
       }

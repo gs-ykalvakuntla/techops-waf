@@ -1,4 +1,4 @@
-# techops-waf-mangalyaan
+# techops-waf
 
 Terraform-based WAF rule management across three AWS accounts.
 All changes go through pull requests. GitHub Actions runs plan on PR, apply on merge.
@@ -172,4 +172,4 @@ Both use OIDC — no AWS access keys stored in GitHub.
 
 ## Contact
 
-TechOps: `@gs-ykalvakuntla` | Repo: `gs-ykalvakuntla/techops-waf-mangalyaan`
+TechOps: `@gs-ykalvakuntla` | Repo: `gs-ykalvakuntla/techops-waf`

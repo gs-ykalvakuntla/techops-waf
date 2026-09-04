@@ -19,7 +19,7 @@ locals {
     Environment = "all"
     ManagedBy   = "terraform"
     Layer       = "eu-rule-groups"
-    Repo        = "techops-waf-mangalyaan"
+    Repo        = "techops-waf"
     Stack       = "waf"
     Region      = "eu-central-1"
   }

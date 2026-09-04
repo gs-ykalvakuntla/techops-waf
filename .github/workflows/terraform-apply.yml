@@ -1,18 +1,39 @@
 name: Terraform Apply
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'layers/**'
+  # Manual trigger only — apply is an intentional operation, not automatic.
+  # This prevents accidental applies when secrets are not configured
+  # or during initial repo setup.
+  #
+  # To trigger: GitHub → Actions → Terraform Apply → Run workflow
+  # Select the branch and click Run.
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'apply' to confirm you want to apply changes to AWS"
+        required: true
+        default: ""
 
 permissions:
-  id-token: write  # required for OIDC token request
+  id-token: write
   contents: read
 
 jobs:
-  # ── Step 1: Detect changed layers ───────────────────────────────────────────
+  # ── Guard: require explicit confirmation ────────────────────────────────────
+  confirm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation input
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "apply" ]; then
+            echo "ERROR: You must type 'apply' in the confirmation field."
+            exit 1
+          fi
+          echo "Confirmed. Proceeding with apply."
+
+  # ── Detect changed layers ───────────────────────────────────────────────────
   detect-layers:
+    needs: confirm
     runs-on: ubuntu-latest
     outputs:
       regex_layers:     ${{ steps.changed.outputs.regex_layers }}
@@ -23,7 +44,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect changed layers by type
+      - name: Detect changed layers vs last apply
         id: changed
         run: |
           ALL=$(git diff --name-only HEAD~1...HEAD \
@@ -38,15 +59,15 @@ jobs:
           RULES=$(echo "$ALL" | grep 'rule-groups' \
             | jq -R -s -c 'split("\n") | map(select(length > 0))')
 
-          echo "bootstrap_layers=$BOOTSTRAP"     >> $GITHUB_OUTPUT
-          echo "regex_layers=$REGEX"             >> $GITHUB_OUTPUT
-          echo "rulegroup_layers=$RULES"         >> $GITHUB_OUTPUT
+          echo "bootstrap_layers=$BOOTSTRAP"  >> $GITHUB_OUTPUT
+          echo "regex_layers=$REGEX"          >> $GITHUB_OUTPUT
+          echo "rulegroup_layers=$RULES"      >> $GITHUB_OUTPUT
 
-          echo "Bootstrap layers: $BOOTSTRAP"
-          echo "Regex-pattern layers: $REGEX"
-          echo "Rule-group layers: $RULES"
+          echo "Bootstrap : $BOOTSTRAP"
+          echo "Regex     : $REGEX"
+          echo "Rules     : $RULES"
 
-  # ── Step 2: Apply bootstrap (if changed) ─────────────────────────────────
+  # ── Step 1: Apply bootstrap (if changed) ────────────────────────────────────
   apply-bootstrap:
     needs: detect-layers
     if: needs.detect-layers.outputs.bootstrap_layers != '[]'
@@ -54,7 +75,7 @@ jobs:
     strategy:
       matrix:
         layer: ${{ fromJson(needs.detect-layers.outputs.bootstrap_layers) }}
-      max-parallel: 1  # apply bootstrap sequentially
+      max-parallel: 1
 
     steps:
       - uses: actions/checkout@v4
@@ -89,7 +110,7 @@ jobs:
         working-directory: layers/${{ matrix.layer }}
         run: terraform apply -auto-approve
 
-  # ── Step 3: Apply regex-patterns BEFORE rule-groups (dependency order) ───
+  # ── Step 2: Apply regex-patterns (after bootstrap) ──────────────────────────
   apply-regex-patterns:
     needs: [detect-layers, apply-bootstrap]
     if: |
@@ -100,7 +121,7 @@ jobs:
     strategy:
       matrix:
         layer: ${{ fromJson(needs.detect-layers.outputs.regex_layers) }}
-      max-parallel: 3  # US1, US2, EU can apply in parallel
+      max-parallel: 3
 
     steps:
       - uses: actions/checkout@v4
@@ -135,8 +156,8 @@ jobs:
         working-directory: layers/${{ matrix.layer }}
         run: terraform apply -auto-approve
 
-  # ── Step 4: Apply rule-groups AFTER regex-patterns ────────────────────────
-  # This ensures pattern set ARNs are in state before rule-groups reads them
+  # ── Step 3: Apply rule-groups (after regex-patterns) ────────────────────────
+  # Dependency enforced: rule-groups reads pattern ARNs from regex-patterns state
   apply-rule-groups:
     needs: [detect-layers, apply-regex-patterns]
     if: |
@@ -147,7 +168,7 @@ jobs:
     strategy:
       matrix:
         layer: ${{ fromJson(needs.detect-layers.outputs.rulegroup_layers) }}
-      max-parallel: 3  # US1, US2, EU can apply in parallel
+      max-parallel: 3
 
     steps:
       - uses: actions/checkout@v4

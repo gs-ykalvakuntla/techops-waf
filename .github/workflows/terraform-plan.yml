@@ -7,12 +7,12 @@ on:
       - 'layers/**'
 
 permissions:
-  id-token: write      # required for OIDC token request
+  id-token: write
   contents: read
-  pull-requests: write # required to post plan output as PR comment
+  pull-requests: write
 
 jobs:
-  # ── Step 1: Detect which layers changed in this PR ──────────────────────────
+  # ── Detect which layers changed in this PR ──────────────────────────────────
   detect-layers:
     runs-on: ubuntu-latest
     outputs:
@@ -33,7 +33,7 @@ jobs:
           echo "layers=$CHANGED" >> $GITHUB_OUTPUT
           echo "Changed layers: $CHANGED"
 
-  # ── Step 2: Run plan for each changed layer ─────────────────────────────────
+  # ── Run plan for each changed layer ─────────────────────────────────────────
   plan:
     needs: detect-layers
     if: needs.detect-layers.outputs.layers != '[]'
@@ -41,15 +41,12 @@ jobs:
     strategy:
       matrix:
         layer: ${{ fromJson(needs.detect-layers.outputs.layers) }}
-      fail-fast: false  # run all layers even if one fails
+      fail-fast: false
 
     steps:
       - uses: actions/checkout@v4
 
-      # Map layer name → AWS account role + region
-      # us1-* → US1 account (895034595272), us-east-1
-      # us2-* → US2 account (180146257873), us-west-2
-      # eu-*  → EU  account (665168952601), eu-central-1
+      # Map layer prefix → AWS account role + region
       - name: Resolve AWS role for layer
         id: aws-role
         run: |
@@ -64,42 +61,54 @@ jobs:
               echo "role=${{ secrets.EU_WAF_AWS_ROLE_ARN }}" >> $GITHUB_OUTPUT
               echo "region=eu-central-1" >> $GITHUB_OUTPUT ;;
             *)
-              echo "Unknown layer prefix: ${{ matrix.layer }}"
+              echo "Unknown layer: ${{ matrix.layer }}"
               exit 1 ;;
           esac
 
-      # OIDC authentication — no AWS keys stored in GitHub
-      # GitHub Actions requests a short-lived token, AWS validates it
+      # Skip OIDC if secrets not yet configured (initial repo setup)
+      - name: Check secrets configured
+        id: secrets-check
+        run: |
+          if [ -z "${{ steps.aws-role.outputs.role }}" ]; then
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "WARNING: AWS role secret not set for ${{ matrix.layer }} — skipping plan"
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Configure AWS credentials (OIDC)
+        if: steps.secrets-check.outputs.configured == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ steps.aws-role.outputs.role }}
           aws-region:     ${{ steps.aws-role.outputs.region }}
 
       - name: Setup Terraform
+        if: steps.secrets-check.outputs.configured == 'true'
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.10.0"
 
       - name: Terraform Init
+        if: steps.secrets-check.outputs.configured == 'true'
         working-directory: layers/${{ matrix.layer }}
         run: terraform init
 
       - name: Terraform Validate
+        if: steps.secrets-check.outputs.configured == 'true'
         working-directory: layers/${{ matrix.layer }}
         run: terraform validate
 
       - name: Terraform Plan
+        if: steps.secrets-check.outputs.configured == 'true'
         id: plan
         working-directory: layers/${{ matrix.layer }}
-        run: |
-          terraform plan -lock=false -no-color 2>&1 | tee plan_output.txt
-          echo "exitcode=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        run: terraform plan -lock=false -no-color 2>&1 | tee plan_output.txt
 
-      # Post plan output as a PR comment for review
+      # Post plan output as PR comment
       - name: Post plan to PR
+        if: steps.secrets-check.outputs.configured == 'true'
         uses: actions/github-script@v7
-        if: always()
         with:
           script: |
             const fs = require('fs');
@@ -113,4 +122,17 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: `### Terraform Plan — \`${{ matrix.layer }}\`\n\`\`\`hcl\n${truncated}\n\`\`\``
+            });
+
+      # Post a note if secrets not configured
+      - name: Post secrets-not-configured note to PR
+        if: steps.secrets-check.outputs.configured == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### Terraform Plan — \`${{ matrix.layer }}\`\n> ⚠️ Skipped — AWS role secret not configured yet.\n> Add \`US1_WAF_AWS_ROLE_ARN\`, \`US2_WAF_AWS_ROLE_ARN\`, \`EU_WAF_AWS_ROLE_ARN\` to repository secrets after running bootstrap.`
             });

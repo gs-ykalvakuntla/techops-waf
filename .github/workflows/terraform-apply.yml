@@ -1,0 +1,183 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'layers/**'
+
+permissions:
+  id-token: write  # required for OIDC token request
+  contents: read
+
+jobs:
+  # ── Step 1: Detect changed layers ───────────────────────────────────────────
+  detect-layers:
+    runs-on: ubuntu-latest
+    outputs:
+      regex_layers:     ${{ steps.changed.outputs.regex_layers }}
+      rulegroup_layers: ${{ steps.changed.outputs.rulegroup_layers }}
+      bootstrap_layers: ${{ steps.changed.outputs.bootstrap_layers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed layers by type
+        id: changed
+        run: |
+          ALL=$(git diff --name-only HEAD~1...HEAD \
+            | grep '^layers/' \
+            | awk -F'/' '{print $2}' \
+            | sort -u)
+
+          BOOTSTRAP=$(echo "$ALL" | grep '^00-bootstrap' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          REGEX=$(echo "$ALL" | grep 'regex-patterns' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          RULES=$(echo "$ALL" | grep 'rule-groups' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "bootstrap_layers=$BOOTSTRAP"     >> $GITHUB_OUTPUT
+          echo "regex_layers=$REGEX"             >> $GITHUB_OUTPUT
+          echo "rulegroup_layers=$RULES"         >> $GITHUB_OUTPUT
+
+          echo "Bootstrap layers: $BOOTSTRAP"
+          echo "Regex-pattern layers: $REGEX"
+          echo "Rule-group layers: $RULES"
+
+  # ── Step 2: Apply bootstrap (if changed) ─────────────────────────────────
+  apply-bootstrap:
+    needs: detect-layers
+    if: needs.detect-layers.outputs.bootstrap_layers != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        layer: ${{ fromJson(needs.detect-layers.outputs.bootstrap_layers) }}
+      max-parallel: 1  # apply bootstrap sequentially
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve AWS role
+        id: aws-role
+        run: |
+          case "${{ matrix.layer }}" in
+            00-bootstrap-us1) echo "role=${{ secrets.US1_WAF_AWS_ROLE_ARN }}"
+                              echo "region=us-east-1" ;;
+            00-bootstrap-us2) echo "role=${{ secrets.US2_WAF_AWS_ROLE_ARN }}"
+                              echo "region=us-west-2" ;;
+            00-bootstrap-eu)  echo "role=${{ secrets.EU_WAF_AWS_ROLE_ARN }}"
+                              echo "region=eu-central-1" ;;
+          esac >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.aws-role.outputs.role }}
+          aws-region:     ${{ steps.aws-role.outputs.region }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: Terraform Init
+        working-directory: layers/${{ matrix.layer }}
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: layers/${{ matrix.layer }}
+        run: terraform apply -auto-approve
+
+  # ── Step 3: Apply regex-patterns BEFORE rule-groups (dependency order) ───
+  apply-regex-patterns:
+    needs: [detect-layers, apply-bootstrap]
+    if: |
+      always() &&
+      needs.detect-layers.outputs.regex_layers != '[]' &&
+      (needs.apply-bootstrap.result == 'success' || needs.apply-bootstrap.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        layer: ${{ fromJson(needs.detect-layers.outputs.regex_layers) }}
+      max-parallel: 3  # US1, US2, EU can apply in parallel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve AWS role
+        id: aws-role
+        run: |
+          case "${{ matrix.layer }}" in
+            us1-*) echo "role=${{ secrets.US1_WAF_AWS_ROLE_ARN }}"
+                   echo "region=us-east-1" ;;
+            us2-*) echo "role=${{ secrets.US2_WAF_AWS_ROLE_ARN }}"
+                   echo "region=us-west-2" ;;
+            eu-*)  echo "role=${{ secrets.EU_WAF_AWS_ROLE_ARN }}"
+                   echo "region=eu-central-1" ;;
+          esac >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.aws-role.outputs.role }}
+          aws-region:     ${{ steps.aws-role.outputs.region }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: Terraform Init
+        working-directory: layers/${{ matrix.layer }}
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: layers/${{ matrix.layer }}
+        run: terraform apply -auto-approve
+
+  # ── Step 4: Apply rule-groups AFTER regex-patterns ────────────────────────
+  # This ensures pattern set ARNs are in state before rule-groups reads them
+  apply-rule-groups:
+    needs: [detect-layers, apply-regex-patterns]
+    if: |
+      always() &&
+      needs.detect-layers.outputs.rulegroup_layers != '[]' &&
+      (needs.apply-regex-patterns.result == 'success' || needs.apply-regex-patterns.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        layer: ${{ fromJson(needs.detect-layers.outputs.rulegroup_layers) }}
+      max-parallel: 3  # US1, US2, EU can apply in parallel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve AWS role
+        id: aws-role
+        run: |
+          case "${{ matrix.layer }}" in
+            us1-*) echo "role=${{ secrets.US1_WAF_AWS_ROLE_ARN }}"
+                   echo "region=us-east-1" ;;
+            us2-*) echo "role=${{ secrets.US2_WAF_AWS_ROLE_ARN }}"
+                   echo "region=us-west-2" ;;
+            eu-*)  echo "role=${{ secrets.EU_WAF_AWS_ROLE_ARN }}"
+                   echo "region=eu-central-1" ;;
+          esac >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.aws-role.outputs.role }}
+          aws-region:     ${{ steps.aws-role.outputs.region }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: Terraform Init
+        working-directory: layers/${{ matrix.layer }}
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: layers/${{ matrix.layer }}
+        run: terraform apply -auto-approve

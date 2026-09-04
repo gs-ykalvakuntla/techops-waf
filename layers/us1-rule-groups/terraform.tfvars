@@ -3,15 +3,21 @@ env_prefix   = "us1"
 state_region = "us-east-1"
 
 # ── Rule Actions ──────────────────────────────────────────────────────────────
-# Controls count vs block mode per rule.
-# New rules always start as "count" — switch to "block" after security validates.
+# One entry per rule. This is the ONLY file you change to switch count → block.
 #
-# Switching count → block:
-#   Change "count" to "block" here (and us2/eu tfvars) → open PR → merge
-#   No changes to main.tf needed.
+# Format:
+#   "RULE_NAME" = "count|block"  # Jira-ID | Added | Switched to block
 #
-# Format: "RULE_NAME" = "count|block"   # Jira-ID | Added | Switched
+# Rules always start as "count" for security team validation.
+# After validation, change "count" → "block" here (and us2/eu) and open a PR.
+# No changes to main.tf are needed when switching modes.
+#
+# RULE_NAME must exactly match the name field in the rule {} block in main.tf
 
 rule_actions = {
-  "CUSTOM_XSS" = "count"  # SEC-101 | 2026-08-01 | pending validation
+  "CUSTOM_XSS"  = "count"   # SEC-101 | 2026-08-01 | pending validation
+
+  # Add the next rule here when the ticket arrives:
+  # "CUSTOM_SQLI" = "count"  # SEC-115 | <date>    | pending validation
+  # "CUSTOM_RCE"  = "count"  # SEC-122 | <date>    | pending validation
 }
